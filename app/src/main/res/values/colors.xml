@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="seed">#FFE91E63</color>
+    <color name="vibe_pink">#FFFF4F8B</color>
+    <color name="vibe_violet">#FF7C4DFF</color>
+    <color name="vibe_cyan">#FF00E5FF</color>
+    <color name="vibe_dark">#FF0F0B17</color>
+    <color name="vibe_card">#FF1A1326</color>
+</resources>
