@@ -7,19 +7,28 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.piash.priya.PriyaApplication
+import com.piash.priya.ai.ChatMessage
+import com.piash.priya.ai.Role
 import com.piash.priya.data.ProviderId
 import com.piash.priya.data.SettingsRepository
 import com.piash.priya.data.SttBackend
 import com.piash.priya.data.TtsBackend
+import com.piash.priya.ui.theme.VibeMuted
+import com.piash.priya.ui.theme.VibePink
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -54,6 +63,8 @@ fun SettingsScreen() {
                 FormSecret("Gemini API Key", SettingsRepository.SECRET_GEMINI, keys)
             }
         }
+
+        TestConnectionButton()
 
         Divider()
         SectionTitle("Voice — STT (যা শুনবে)")
@@ -152,6 +163,55 @@ fun SettingsScreen() {
 @Composable
 private fun SectionTitle(text: String) {
     Text(text, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+}
+
+@Composable
+private fun TestConnectionButton() {
+    val app = remember { PriyaApplication.get() }
+    val scope = rememberCoroutineScope()
+    var status by remember { mutableStateOf<TestStatus>(TestStatus.Idle) }
+    Column {
+        Spacer(Modifier.height(4.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilledTonalButton(
+                onClick = {
+                    status = TestStatus.Running
+                    scope.launch {
+                        status = try {
+                            val provider = app.providers.active()
+                            val reply = provider.complete(
+                                listOf(
+                                    ChatMessage(Role.SYSTEM, "Reply with a single short word."),
+                                    ChatMessage(Role.USER, "ping"),
+                                )
+                            ) {}
+                            TestStatus.Ok(reply.take(80))
+                        } catch (t: Throwable) {
+                            TestStatus.Fail(t.message ?: t.javaClass.simpleName)
+                        }
+                    }
+                },
+                enabled = status !is TestStatus.Running,
+            ) {
+                Icon(Icons.Filled.Bolt, null)
+                Spacer(Modifier.width(6.dp))
+                Text(if (status is TestStatus.Running) "Testing…" else "Test connection")
+            }
+            when (val st = status) {
+                is TestStatus.Idle -> Text("API key valid কিনা check করুন।", color = VibeMuted, style = MaterialTheme.typography.bodySmall)
+                is TestStatus.Running -> CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = VibePink)
+                is TestStatus.Ok -> Text("OK: ${st.reply}", color = Color(0xFF7CFFB2), style = MaterialTheme.typography.bodySmall)
+                is TestStatus.Fail -> Text(st.message, color = Color(0xFFFF8A8A), style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+private sealed interface TestStatus {
+    data object Idle : TestStatus
+    data object Running : TestStatus
+    data class Ok(val reply: String) : TestStatus
+    data class Fail(val message: String) : TestStatus
 }
 
 @Composable

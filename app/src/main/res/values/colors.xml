@@ -4,6 +4,7 @@
     <color name="vibe_pink">#FFFF4F8B</color>
     <color name="vibe_violet">#FF7C4DFF</color>
     <color name="vibe_cyan">#FF00E5FF</color>
-    <color name="vibe_dark">#FF0F0B17</color>
-    <color name="vibe_card">#FF1A1326</color>
+    <color name="vibe_magenta">#FFE040FB</color>
+    <color name="vibe_dark">#FF0A0613</color>
+    <color name="vibe_card">#FF130A22</color>
 </resources>

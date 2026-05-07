@@ -92,9 +92,12 @@ class VoicePipeline(
         _state.value = State.IDLE
     }
 
-    /** External one-shot — used by chat UI text input. */
+    fun clearError() { _lastError.value = null }
+
+    /** External one-shot — used by chat UI text input. Speaks reply via TTS too. */
     fun submit(text: String) {
         inflightReplyJob?.cancel()
+        if (tts == null) ensureTts()
         inflightReplyJob = scope.launch { runTurn(text) }
     }
 
