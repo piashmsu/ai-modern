@@ -6,6 +6,8 @@
     <string name="accessibility_service_label">Priya Screen Assistant</string>
     <string name="accessibility_service_description">Priya আপনার স্ক্রিনে কী চলছে দেখতে এবং আপনার হয়ে অন্য অ্যাপে কাজ (tap, scroll, type) করতে পারবে। শুধুমাত্র Settings থেকে enable হওয়ার পরেই active হয়।</string>
 
+    <string name="notif_listener_label">Priya Notification Reader</string>
+
     <string name="notif_channel_assistant">Priya Assistant</string>
     <string name="notif_channel_assistant_desc">Always-on background listening notifications</string>
     <string name="notif_channel_overlay">Priya Overlay</string>

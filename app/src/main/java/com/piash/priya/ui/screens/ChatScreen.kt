@@ -1,5 +1,10 @@
 package com.piash.priya.ui.screens
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -9,7 +14,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -20,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -36,6 +45,7 @@ import com.piash.priya.ui.theme.VibeViolet
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen() {
+    val context = LocalContext.current
     val app = remember { PriyaApplication.get() }
     val transcript by app.chatEngine.transcript.collectAsState()
     val streaming by app.chatEngine.streaming.collectAsState()
@@ -43,7 +53,25 @@ fun ChatScreen() {
     val chatError by app.chatEngine.lastError.collectAsState()
     val pipelineError by app.voicePipeline.lastError.collectAsState()
     var input by rememberSaveable { mutableStateOf("") }
+    var showClearConfirm by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
+
+    if (showClearConfirm) {
+        AlertDialog(
+            onDismissRequest = { showClearConfirm = false },
+            title = { Text("Clear conversation?") },
+            text = { Text("সব chat history (memory + disk) মুছে যাবে। নিশ্চিত?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    app.chatEngine.reset()
+                    showClearConfirm = false
+                }) { Text("Clear", color = Color(0xFFFF6B7A)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearConfirm = false }) { Text("Cancel") }
+            }
+        )
+    }
 
     LaunchedEffect(transcript.size, live) {
         val total = transcript.size + (if (streaming && live.isNotBlank()) 1 else 0)
@@ -51,6 +79,29 @@ fun ChatScreen() {
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        if (transcript.isNotEmpty()) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "${transcript.count { it.role == Role.USER }} turns",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = VibeMuted,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = { copyTranscript(context, transcript) }) {
+                    Icon(Icons.Filled.ContentCopy, "Copy", tint = VibeCyan)
+                }
+                IconButton(onClick = { shareTranscript(context, transcript) }) {
+                    Icon(Icons.Filled.Share, "Share", tint = VibeMagenta)
+                }
+                IconButton(onClick = { showClearConfirm = true }) {
+                    Icon(Icons.Filled.DeleteSweep, "Clear", tint = Color(0xFFFF8A8A))
+                }
+            }
+        }
         val errorText = chatError ?: pipelineError
         AnimatedVisibility(visible = errorText != null) {
             Column {
@@ -198,6 +249,35 @@ private fun Bubble(msg: ChatMessage) {
             }
         }
     }
+}
+
+private fun formatTranscript(messages: List<ChatMessage>): String = buildString {
+    messages.forEach { m ->
+        val who = when (m.role) {
+            Role.USER -> "You"
+            Role.ASSISTANT -> "Priya"
+            Role.SYSTEM -> return@forEach
+        }
+        append(who).append(": ").append(m.content).append("\n\n")
+    }
+}.trimEnd()
+
+private fun copyTranscript(context: Context, messages: List<ChatMessage>) {
+    val text = formatTranscript(messages)
+    if (text.isBlank()) return
+    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    cm.setPrimaryClip(ClipData.newPlainText("priya-chat", text))
+    Toast.makeText(context, "Conversation copied", Toast.LENGTH_SHORT).show()
+}
+
+private fun shareTranscript(context: Context, messages: List<ChatMessage>) {
+    val text = formatTranscript(messages)
+    if (text.isBlank()) return
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_TEXT, text)
+    }
+    context.startActivity(Intent.createChooser(intent, "Share conversation").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
 }
 
 @Composable

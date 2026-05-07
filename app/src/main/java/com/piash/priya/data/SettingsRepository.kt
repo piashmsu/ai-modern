@@ -54,6 +54,13 @@ class SettingsRepository(context: Context) {
         personalityIntensity = prefs.getInt(K_PERSONALITY, 70),
         userName = prefs.getString(K_USER_NAME, "") ?: "",
         customSystemPrompt = prefs.getString(K_CUSTOM_PROMPT, "") ?: "",
+        personalityPreset = PersonalityPreset.valueOf(
+            prefs.getString(K_PERSONALITY_PRESET, PersonalityPreset.GIRLFRIEND.name) ?: PersonalityPreset.GIRLFRIEND.name
+        ),
+        notificationReaderEnabled = prefs.getBoolean(K_NOTIF_READER, false),
+        voiceCommandsEnabled = prefs.getBoolean(K_VOICE_CMDS, true),
+        confirmSensitiveActions = prefs.getBoolean(K_CONFIRM_SENSITIVE, true),
+        persistConversation = prefs.getBoolean(K_PERSIST_CHAT, true),
     )
 
     private fun save(s: Settings) {
@@ -78,6 +85,11 @@ class SettingsRepository(context: Context) {
             putInt(K_PERSONALITY, s.personalityIntensity)
             putString(K_USER_NAME, s.userName)
             putString(K_CUSTOM_PROMPT, s.customSystemPrompt)
+            putString(K_PERSONALITY_PRESET, s.personalityPreset.name)
+            putBoolean(K_NOTIF_READER, s.notificationReaderEnabled)
+            putBoolean(K_VOICE_CMDS, s.voiceCommandsEnabled)
+            putBoolean(K_CONFIRM_SENSITIVE, s.confirmSensitiveActions)
+            putBoolean(K_PERSIST_CHAT, s.persistConversation)
         }.apply()
     }
 
@@ -102,6 +114,11 @@ class SettingsRepository(context: Context) {
         private const val K_PERSONALITY = "personality"
         private const val K_USER_NAME = "user_name"
         private const val K_CUSTOM_PROMPT = "custom_prompt"
+        private const val K_PERSONALITY_PRESET = "personality_preset"
+        private const val K_NOTIF_READER = "notif_reader"
+        private const val K_VOICE_CMDS = "voice_cmds"
+        private const val K_CONFIRM_SENSITIVE = "confirm_sensitive"
+        private const val K_PERSIST_CHAT = "persist_chat"
 
         const val SECRET_OPENAI = "openai_api_key"
         const val SECRET_GROQ = "groq_api_key"
@@ -113,6 +130,19 @@ class SettingsRepository(context: Context) {
 enum class ProviderId { OPENAI, GROQ, GEMINI }
 enum class TtsBackend { ANDROID, ELEVENLABS, OPENAI_COMPATIBLE }
 enum class SttBackend { ANDROID, GROQ_WHISPER }
+
+/**
+ * Conversation tone presets — switches Priya's system prompt entirely.
+ * GIRLFRIEND remains the default (the original "Priya" identity).
+ */
+enum class PersonalityPreset {
+    GIRLFRIEND,
+    PROFESSIONAL,
+    CONCISE,
+    FUN,
+    FORMAL,
+    CREATOR,
+}
 
 data class Settings(
     val activeProvider: ProviderId,
@@ -135,4 +165,9 @@ data class Settings(
     val personalityIntensity: Int,
     val userName: String,
     val customSystemPrompt: String,
+    val personalityPreset: PersonalityPreset,
+    val notificationReaderEnabled: Boolean,
+    val voiceCommandsEnabled: Boolean,
+    val confirmSensitiveActions: Boolean,
+    val persistConversation: Boolean,
 )

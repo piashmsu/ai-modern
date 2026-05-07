@@ -23,10 +23,12 @@ import com.piash.priya.PriyaApplication
 import com.piash.priya.ai.ChatMessage
 import com.piash.priya.ai.Role
 import com.piash.priya.automation.AccessibilityEnabler
+import com.piash.priya.data.PersonalityPreset
 import com.piash.priya.data.ProviderId
 import com.piash.priya.data.SettingsRepository
 import com.piash.priya.data.SttBackend
 import com.piash.priya.data.TtsBackend
+import com.piash.priya.services.PriyaNotificationListener
 import com.piash.priya.ui.theme.VibeMuted
 import com.piash.priya.ui.theme.VibePink
 import kotlinx.coroutines.launch
@@ -101,17 +103,41 @@ fun SettingsScreen() {
         FormText("Your name (Priya আপনাকে যে নামে ডাকবে)", s.userName) {
             v -> app.settings.update { it.copy(userName = v) }
         }
-        Text("Personality intensity: ${s.personalityIntensity}%")
-        Slider(
-            value = s.personalityIntensity.toFloat(),
-            onValueChange = { v -> app.settings.update { it.copy(personalityIntensity = v.toInt()) } },
-            valueRange = 0f..100f
+        Text("Mode")
+        PersonalityPresetPicker(
+            selected = s.personalityPreset,
+            onSelected = { v -> app.settings.update { it.copy(personalityPreset = v) } }
         )
+        if (s.personalityPreset == PersonalityPreset.GIRLFRIEND) {
+            Text("Personality intensity: ${s.personalityIntensity}%")
+            Slider(
+                value = s.personalityIntensity.toFloat(),
+                onValueChange = { v -> app.settings.update { it.copy(personalityIntensity = v.toInt()) } },
+                valueRange = 0f..100f
+            )
+        }
         FormMultiline("Custom system prompt (optional — empty হলে default Priya prompt)",
             s.customSystemPrompt) { v -> app.settings.update { it.copy(customSystemPrompt = v) } }
 
         Divider()
         SectionTitle("Behaviour")
+        ToggleRow(
+            "Voice command intents (\"WhatsApp খোলো\" → directly opens app)", s.voiceCommandsEnabled
+        ) { v -> app.settings.update { it.copy(voiceCommandsEnabled = v) } }
+        ToggleRow(
+            "Persistent conversation (chat history disk-এ save)", s.persistConversation
+        ) { v -> app.settings.update { it.copy(persistConversation = v) } }
+        ToggleRow(
+            "Confirm sensitive actions (SMS / root-এর আগে dialog)", s.confirmSensitiveActions
+        ) { v -> app.settings.update { it.copy(confirmSensitiveActions = v) } }
+        ToggleRow(
+            "Notification reader (নতুন SMS/WhatsApp/etc Priya পড়ে শোনাবে)", s.notificationReaderEnabled
+        ) { v ->
+            app.settings.update { it.copy(notificationReaderEnabled = v) }
+            if (v && !PriyaNotificationListener.hasAccess(context)) {
+                PriyaNotificationListener.openSettings(context)
+            }
+        }
         ToggleRow(
             "Barge-in (TTS-চলাকালে কথা বললে থামাও)", s.bargeInEnabled
         ) { v -> app.settings.update { it.copy(bargeInEnabled = v) } }
@@ -160,8 +186,45 @@ fun SettingsScreen() {
             },
             modifier = Modifier.fillMaxWidth()
         ) { Text("Allow overlay (display over other apps)") }
+
+        OutlinedButton(
+            onClick = { PriyaNotificationListener.openSettings(context) },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("Allow notification access (notification reader)") }
         Spacer(Modifier.height(40.dp))
     }
+}
+
+@Composable
+private fun PersonalityPresetPicker(
+    selected: PersonalityPreset,
+    onSelected: (PersonalityPreset) -> Unit,
+) {
+    val rows = PersonalityPreset.values().toList().chunked(3)
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        rows.forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                row.forEach { p ->
+                    FilterChip(
+                        selected = selected == p,
+                        onClick = { onSelected(p) },
+                        label = { Text(p.label()) },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                repeat(3 - row.size) { Spacer(modifier = Modifier.weight(1f)) }
+            }
+        }
+    }
+}
+
+private fun PersonalityPreset.label(): String = when (this) {
+    PersonalityPreset.GIRLFRIEND -> "Girlfriend"
+    PersonalityPreset.PROFESSIONAL -> "Professional"
+    PersonalityPreset.CONCISE -> "Concise"
+    PersonalityPreset.FUN -> "Fun"
+    PersonalityPreset.FORMAL -> "Formal"
+    PersonalityPreset.CREATOR -> "Creator"
 }
 
 @Composable

@@ -6,6 +6,7 @@ import android.net.Uri
 import android.provider.Settings
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -18,6 +19,7 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -27,6 +29,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -77,13 +80,38 @@ fun HomeScreen() {
         Spacer(Modifier.height(8.dp))
         TitleHeader()
 
-        // Centered animated orb that reflects pipeline state.
+        // Centered animated orb that reflects pipeline state. Long-press to push-to-talk.
         Box(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp)
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onPress = {
+                            if (!perms.allPermissionsGranted) {
+                                perms.launchMultiplePermissionRequest()
+                                return@detectTapGestures
+                            }
+                            if (!configured) return@detectTapGestures
+                            val started = app.voicePipeline.pttStart()
+                            if (started) {
+                                try { tryAwaitRelease() } finally {
+                                    app.voicePipeline.pttStop()
+                                }
+                            }
+                        },
+                    )
+                },
             contentAlignment = Alignment.Center,
         ) {
             AssistantOrb(state = state, size = 200.dp)
         }
+        Text(
+            "Tap-and-hold orb-এ চাপ দিয়ে কথা বলুন (push-to-talk)।",
+            style = MaterialTheme.typography.labelSmall,
+            color = VibeMuted,
+            modifier = Modifier.fillMaxWidth(),
+        )
 
         StatePill(state)
 
@@ -136,6 +164,15 @@ fun HomeScreen() {
                 }
             },
             onStop = {
+                app.settings.update { it.copy(priyaLiveMode = false) }
+                PriyaForegroundService.stop(context)
+                OverlayService.stop(context)
+            }
+        )
+
+        EmergencyStopCard(
+            onPress = {
+                app.voicePipeline.emergencyStop()
                 app.settings.update { it.copy(priyaLiveMode = false) }
                 PriyaForegroundService.stop(context)
                 OverlayService.stop(context)
@@ -320,6 +357,40 @@ private fun ActivateCard(
             if (state == VoicePipeline.State.ERROR) {
                 Spacer(Modifier.height(8.dp))
                 Text("Pipeline error — উপরে details দেখুন।", color = Color(0xFFFF8A8A), style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmergencyStopCard(onPress: () -> Unit) {
+    GlassCard(accent = Brush.linearGradient(listOf(Color(0xFFFF4D6D), Color(0xFFFF8AA0)))) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Emergency stop",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color(0xFFFFB8C5),
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    "সব কিছু থামাও — voice, TTS, live service।",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = VibeMuted,
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Button(
+                onClick = onPress,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFFFF4D6D),
+                    contentColor = Color.White,
+                ),
+                shape = RoundedCornerShape(14.dp),
+            ) {
+                Icon(Icons.Filled.Stop, null)
+                Spacer(Modifier.width(6.dp))
+                Text("STOP", fontWeight = FontWeight.Bold)
             }
         }
     }

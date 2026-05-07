@@ -4,6 +4,7 @@ import android.content.Context
 import com.piash.priya.ai.ChatEngine
 import com.piash.priya.data.SecureKeyStore
 import com.piash.priya.data.SettingsRepository
+import com.piash.priya.data.SttBackend
 import com.piash.priya.data.TtsBackend
 import com.piash.priya.util.DebugLog
 import kotlinx.coroutines.CoroutineScope
@@ -18,23 +19,29 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * End-to-end voice loop:
  *
  *   STT partial → if TTS speaking → cancel TTS, drop in-flight LLM.
- *   STT final   → ChatEngine.send → stream tokens → TTS as soon as we have
- *                a complete sentence → repeat.
+ *   STT final   → IntentRouter (deterministic commands) → fallback ChatEngine.send →
+ *                stream tokens → TTS as soon as we have a complete sentence → repeat.
  *
- * The pipeline pauses the SpeechRecognizer for the entire duration of any
- * TTS utterance so the AI doesn't hear its own voice through the speaker
- * and end up arguing with itself. Listening resumes once the utterance is
- * fully finished or the user barges in.
+ * Pauses the SpeechRecognizer for the entire duration of any TTS utterance
+ * so the AI doesn't hear its own voice through the speaker. Listening
+ * resumes once the utterance is fully finished or the user barges in.
+ *
+ * Also exposes [pttStart]/[pttStop] for push-to-talk, which records audio
+ * locally and (when configured) routes it through cloud Whisper instead of
+ * the platform recognizer.
  */
 class VoicePipeline(
     private val context: Context,
     private val settings: SettingsRepository,
+    private val secureKeys: SecureKeyStore,
     private val chatEngine: ChatEngine,
+    private val intentRouter: IntentRouter,
 ) {
 
     enum class State { IDLE, LISTENING, THINKING, SPEAKING, ERROR }
@@ -53,10 +60,12 @@ class VoicePipeline(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val stt = SpeechRecognizerWrapper(context)
+    private val pcmRecorder = AudioRecorderPcm(context)
     @Volatile private var tts: TtsBackendImpl? = null
     @Volatile private var pipelineJob: Job? = null
     @Volatile private var inflightReplyJob: Job? = null
     @Volatile private var running = false
+    @Volatile private var pttActive = false
 
     /** True while the AI's voice is actively coming out of the speaker. */
     @Volatile private var ttsActive = false
@@ -68,8 +77,6 @@ class VoicePipeline(
         ensureTts()
         pipelineJob = scope.launch {
             stt.events.collectLatest { ev ->
-                // Suppress every STT event while the AI is speaking — this is
-                // what stops the assistant from listening to its own audio.
                 if (ttsActive) {
                     DebugLog.d("VoicePipeline", "drop STT event during TTS: ${ev::class.simpleName}")
                     return@collectLatest
@@ -107,8 +114,29 @@ class VoicePipeline(
         } catch (_: Throwable) {}
         stt.stop()
         tts?.stop()
+        try { pcmRecorder.cancel() } catch (_: Throwable) {}
         ttsActive = false
+        pttActive = false
         _state.value = State.IDLE
+    }
+
+    /**
+     * Hard kill — used by the "Emergency stop" UI button. Cancels every
+     * in-flight job and forces the state machine back to IDLE.
+     */
+    fun emergencyStop() {
+        DebugLog.w("VoicePipeline", "EMERGENCY STOP")
+        running = false
+        try { inflightReplyJob?.cancel() } catch (_: Throwable) {}
+        try { pipelineJob?.cancel() } catch (_: Throwable) {}
+        try { stt.stop() } catch (_: Throwable) {}
+        try { tts?.stop() } catch (_: Throwable) {}
+        try { pcmRecorder.cancel() } catch (_: Throwable) {}
+        ttsActive = false
+        pttActive = false
+        _state.value = State.IDLE
+        _liveTranscript.value = ""
+        _liveReply.value = ""
     }
 
     fun clearError() { _lastError.value = null }
@@ -116,9 +144,106 @@ class VoicePipeline(
     /** External one-shot — used by chat UI text input. Speaks reply via TTS too. */
     fun submit(text: String) {
         DebugLog.i("VoicePipeline", "submit(\"${text.take(120)}\")")
+        // Try deterministic intent first to avoid LLM round-trip + cost.
+        if (settings.state.value.voiceCommandsEnabled) {
+            val outcome = intentRouter.route(text)
+            if (outcome != null) {
+                handleIntent(text, outcome)
+                return
+            }
+        }
         inflightReplyJob?.cancel()
         if (tts == null) ensureTts()
         inflightReplyJob = scope.launch { runTurn(text) }
+    }
+
+    /** Push-to-talk: start capturing PCM audio. Caller must pair with [pttStop]. */
+    fun pttStart(): Boolean {
+        if (pttActive) return true
+        DebugLog.i("VoicePipeline", "pttStart()")
+        // Pause continuous listener so we don't double-record.
+        try { stt.stop() } catch (_: Throwable) {}
+        val ok = pcmRecorder.start()
+        if (ok) {
+            pttActive = true
+            _state.value = State.LISTENING
+            _liveTranscript.value = ""
+        } else {
+            _lastError.value = "Mic permission missing or unavailable"
+        }
+        return ok
+    }
+
+    /** Stops PTT capture, transcribes via Whisper or platform STT, then submits. */
+    fun pttStop() {
+        if (!pttActive) return
+        pttActive = false
+        DebugLog.i("VoicePipeline", "pttStop()")
+        val wav = pcmRecorder.stopAndWav()
+        if (wav.isEmpty()) {
+            _state.value = if (running) State.LISTENING else State.IDLE
+            return
+        }
+        _state.value = State.THINKING
+        scope.launch {
+            val s = settings.state.value
+            val text = try {
+                when (s.sttBackend) {
+                    SttBackend.GROQ_WHISPER -> {
+                        val key = secureKeys.get(SettingsRepository.SECRET_GROQ).trim()
+                        if (key.isBlank()) {
+                            _lastError.value = "Groq API key missing — Whisper STT requires Groq key"
+                            ""
+                        } else {
+                            withContext(Dispatchers.IO) {
+                                WhisperStt(
+                                    baseUrl = "https://api.groq.com/openai/v1",
+                                    apiKey = key,
+                                    model = s.groqWhisperModel,
+                                ).transcribe(wav, s.languageTag)
+                            }
+                        }
+                    }
+                    SttBackend.ANDROID -> {
+                        DebugLog.w("VoicePipeline", "PTT used with Android STT — falling back to platform; transcription will be empty")
+                        ""
+                    }
+                }
+            } catch (t: Throwable) {
+                DebugLog.e("VoicePipeline", "ptt transcribe failed", t)
+                _lastError.value = t.message ?: "transcription failed"
+                ""
+            }
+            if (text.isNotBlank()) {
+                _liveTranscript.value = text
+                submit(text)
+            } else {
+                _state.value = if (running) State.LISTENING else State.IDLE
+            }
+            if (running && !ttsActive) restartListening()
+        }
+    }
+
+    private fun handleIntent(originalText: String, outcome: IntentRouter.Result) {
+        val reply = when (outcome) {
+            is IntentRouter.Result.AppLaunched -> "${outcome.label} খুললাম।"
+            is IntentRouter.Result.AppNotFound -> "${outcome.query} খুঁজে পেলাম না।"
+        }
+        chatEngine.injectExchange(originalText, reply)
+        _liveTranscript.value = originalText
+        _liveReply.value = reply
+        // Speak the confirmation so user gets audible feedback.
+        if (tts == null) ensureTts()
+        scope.launch {
+            ttsActive = true
+            try { speakSegment(reply) } finally {
+                ttsActive = false
+                if (running) {
+                    delay(250)
+                    if (running && !ttsActive) restartListening()
+                }
+            }
+        }
     }
 
     private fun handleBargeIn(ev: SpeechRecognizerWrapper.Event) {
@@ -138,15 +263,9 @@ class VoicePipeline(
     private suspend fun runTurn(userText: String) {
         _state.value = State.THINKING
         _liveReply.value = ""
-        // Pause the recognizer up-front — we'll be speaking soon and we
-        // don't want to capture a syllable of TTS audio.
         stt.stop()
         ttsActive = true
 
-        // Sentences are pushed to this channel as they're flushed from the
-        // streaming reply, then a single speaker coroutine awaits each one
-        // sequentially. This is what guarantees TTS plays a complete reply
-        // instead of being cut off when the next sentence arrives.
         val sentenceQueue = Channel<String>(Channel.UNLIMITED)
         val speaker = scope.launch {
             for (segment in sentenceQueue) {
@@ -175,7 +294,6 @@ class VoicePipeline(
         } finally {
             ttsActive = false
             if (_state.value != State.ERROR) _state.value = if (running) State.LISTENING else State.IDLE
-            // Grace period so the speaker stops echoing before mic re-arms.
             if (running) {
                 delay(250)
                 if (running && !ttsActive) restartListening()
@@ -214,21 +332,18 @@ class VoicePipeline(
             DebugLog.d("VoicePipeline", "skip beginListening (TTS active)")
             return
         }
+        // PTT mode + cloud Whisper: don't run platform STT in parallel.
+        if (settings.state.value.sttBackend == SttBackend.GROQ_WHISPER) {
+            DebugLog.d("VoicePipeline", "skip continuous STT (Whisper backend = push-to-talk only)")
+            _state.value = if (running) State.IDLE else State.IDLE
+            return
+        }
         val tag = chooseLanguageTag(settings.state.value.languageTag)
         DebugLog.d("VoicePipeline", "beginListening lang=$tag")
         stt.start(tag)
     }
 
-    /**
-     * Many devices don't ship the bn-BD recogniser. Walk a fallback chain so
-     * the user gets *some* recognition rather than silent failure. The
-     * SpeechRecognizer doesn't expose installed locales reliably, so we
-     * just hand the chosen tag through and let it fall back implicitly via
-     * the EXTRA_LANGUAGE_PREFERENCE preference list.
-     */
-    private fun chooseLanguageTag(requested: String): String {
-        return requested
-    }
+    private fun chooseLanguageTag(requested: String): String = requested
 
     private fun restartListening() {
         scope.launch {

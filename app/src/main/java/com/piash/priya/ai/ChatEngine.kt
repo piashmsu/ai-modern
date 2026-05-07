@@ -1,5 +1,6 @@
 package com.piash.priya.ai
 
+import com.piash.priya.data.ChatHistoryStore
 import com.piash.priya.data.SettingsRepository
 import com.piash.priya.util.DebugLog
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -13,13 +14,15 @@ import kotlinx.coroutines.sync.withLock
  *
  * Holds the in-memory transcript, prepends the personality system prompt,
  * trims old turns when context grows too large, and routes streaming
- * completions through the active [LlmProvider].
+ * completions through the active [LlmProvider]. Persists user/assistant
+ * turns to disk so chat history survives process death.
  */
 class ChatEngine(
     private val providers: ProviderRegistry,
     private val settings: SettingsRepository,
+    private val history: ChatHistoryStore,
 ) {
-    private val _transcript = MutableStateFlow<List<ChatMessage>>(emptyList())
+    private val _transcript = MutableStateFlow(loadInitial())
     val transcript: StateFlow<List<ChatMessage>> = _transcript.asStateFlow()
 
     private val _streaming = MutableStateFlow(false)
@@ -30,12 +33,33 @@ class ChatEngine(
 
     private val turnLock = Mutex()
 
+    private fun loadInitial(): List<ChatMessage> {
+        if (!settings.state.value.persistConversation) return emptyList()
+        val loaded = history.load()
+        if (loaded.isNotEmpty()) DebugLog.i("ChatEngine", "loaded ${loaded.size} persisted messages")
+        return loaded
+    }
+
     fun reset() {
         _transcript.value = emptyList()
         _lastError.value = null
+        history.clear()
     }
 
     fun clearError() { _lastError.value = null }
+
+    /**
+     * Inject a deterministic exchange into the transcript without hitting
+     * the LLM. Used by [com.piash.priya.voice.IntentRouter] so users see
+     * "open whatsapp" → "WhatsApp খুললাম" right in the chat history.
+     */
+    fun injectExchange(userText: String, assistantReply: String) {
+        val next = _transcript.value +
+            ChatMessage(Role.USER, userText) +
+            ChatMessage(Role.ASSISTANT, assistantReply)
+        _transcript.value = next
+        persistIfEnabled(next)
+    }
 
     suspend fun send(
         userText: String,
@@ -70,8 +94,15 @@ class ChatEngine(
             _streaming.value = false
         }
         DebugLog.i("ChatEngine", "reply received in ${System.currentTimeMillis() - started}ms (${reply.length} chars)")
-        _transcript.value = current + ChatMessage(Role.ASSISTANT, reply)
+        val updated = current + ChatMessage(Role.ASSISTANT, reply)
+        _transcript.value = updated
+        persistIfEnabled(updated)
         reply
+    }
+
+    private fun persistIfEnabled(messages: List<ChatMessage>) {
+        if (!settings.state.value.persistConversation) return
+        history.save(ChatHistoryStore.cap(messages))
     }
 
     private fun friendly(t: Throwable): String {
