@@ -11,6 +11,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import com.piash.priya.util.DebugLog
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -66,7 +67,15 @@ class GeminiProvider(
             })
         }
 
-        val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:streamGenerateContent?alt=sse&key=$apiKey"
+        // Google deprecated `-latest` aliases. Auto-rewrite the most common
+        // dead names so users with old defaults don't get a silent 404.
+        val effectiveModel = normalizeModelName(model)
+        if (effectiveModel != model) {
+            DebugLog.w("GeminiProvider", "rewriting deprecated model '$model' → '$effectiveModel'")
+        }
+        val url = "https://generativelanguage.googleapis.com/v1beta/models/$effectiveModel:streamGenerateContent?alt=sse&key=$apiKey"
+        val safeUrl = url.replace(apiKey, "***")
+        DebugLog.d("GeminiProvider", "POST $safeUrl")
         val req = Request.Builder()
             .url(url)
             .addHeader("Accept", "text/event-stream")
@@ -76,7 +85,11 @@ class GeminiProvider(
         val full = StringBuilder()
         Http.client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) {
-                throw LlmException("$displayName HTTP ${resp.code}: ${resp.body?.string()?.take(400)}")
+                val body = resp.body?.string()?.take(500).orEmpty()
+                val hint = if (resp.code == 404)
+                    " — model '$effectiveModel' not found। Try gemini-2.0-flash, gemini-2.5-flash, gemini-1.5-flash"
+                else ""
+                throw LlmException("$displayName HTTP ${resp.code}: ${body.ifBlank { "(empty body)" }}$hint")
             }
             val source = resp.body?.source() ?: throw LlmException("Empty body")
             while (!source.exhausted()) {
@@ -104,6 +117,19 @@ class GeminiProvider(
         } catch (_: Throwable) {
             null
         }
+    }
+
+    /**
+     * Map deprecated `-latest` aliases to currently-served versions so a
+     * stale default doesn't return 404. Anything not on the rewrite list is
+     * passed through unchanged so users can still hand-pick previews.
+     */
+    private fun normalizeModelName(name: String): String = when (name.trim()) {
+        "gemini-1.5-flash-latest" -> "gemini-1.5-flash"
+        "gemini-1.5-pro-latest" -> "gemini-1.5-pro"
+        "gemini-pro" -> "gemini-1.5-flash"
+        "gemini-pro-latest" -> "gemini-1.5-pro"
+        else -> name.trim()
     }
 
     companion object {

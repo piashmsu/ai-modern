@@ -1,5 +1,6 @@
 package com.piash.priya.ai
 
+import com.piash.priya.util.DebugLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -52,6 +53,7 @@ class OpenAiProvider(
         }
 
         val url = baseUrl.trimEnd('/') + "/chat/completions"
+        DebugLog.d(displayName, "POST $url model=$model")
         val req = Request.Builder()
             .url(url)
             .addHeader("Authorization", "Bearer $apiKey")
@@ -62,7 +64,8 @@ class OpenAiProvider(
         val full = StringBuilder()
         Http.client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) {
-                throw LlmException("$displayName HTTP ${resp.code}: ${resp.body?.string()?.take(400)}")
+                val body = resp.body?.string()?.take(500).orEmpty()
+                throw LlmException("$displayName HTTP ${resp.code}: ${body.ifBlank { "(empty body)" }}")
             }
             val source = resp.body?.source() ?: throw LlmException("Empty body")
             while (!source.exhausted()) {

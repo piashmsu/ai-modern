@@ -33,9 +33,9 @@ class SettingsRepository(context: Context) {
         ),
         openAiBaseUrl = prefs.getString(K_OPENAI_BASE, "https://api.openai.com/v1") ?: "https://api.openai.com/v1",
         openAiModel = prefs.getString(K_OPENAI_MODEL, "gpt-4o-mini") ?: "gpt-4o-mini",
-        groqModel = prefs.getString(K_GROQ_MODEL, "llama-3.1-70b-versatile") ?: "llama-3.1-70b-versatile",
+        groqModel = prefs.getString(K_GROQ_MODEL, "llama-3.3-70b-versatile") ?: "llama-3.3-70b-versatile",
         groqWhisperModel = prefs.getString(K_GROQ_WHISPER, "whisper-large-v3") ?: "whisper-large-v3",
-        geminiModel = prefs.getString(K_GEMINI_MODEL, "gemini-1.5-flash-latest") ?: "gemini-1.5-flash-latest",
+        geminiModel = prefs.getString(K_GEMINI_MODEL, "gemini-2.0-flash") ?: "gemini-2.0-flash",
         ttsBackend = TtsBackend.valueOf(
             prefs.getString(K_TTS_BACKEND, TtsBackend.ANDROID.name) ?: TtsBackend.ANDROID.name
         ),
