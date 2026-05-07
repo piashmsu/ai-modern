@@ -3,76 +3,116 @@ package com.piash.priya.voice
 import android.content.Context
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import com.piash.priya.util.DebugLog
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 
 /**
  * Wrapper around the platform [TextToSpeech] engine.
  *
- * Public methods are suspend so callers can `await` the spoken phrase, but
- * [stop] is fully synchronous and can be invoked from a barge-in handler.
+ * `speak` suspends until the utterance fully finishes (or errors out / is
+ * stopped) so the caller — typically [VoicePipeline] — can hold the
+ * SPEAKING state for exactly as long as the audio plays. This is what lets
+ * the pipeline reliably pause the SpeechRecognizer for the duration and
+ * avoid the AI hearing its own output.
  */
 class AndroidTts(context: Context) : TtsBackendImpl {
 
     private val tts: TextToSpeech
     @Volatile private var ready = false
-    @Volatile private var currentUtterance: String? = null
+    private val pending = ConcurrentHashMap<String, CancellableContinuation<Unit>>()
 
     init {
         tts = TextToSpeech(context.applicationContext) { status ->
             ready = status == TextToSpeech.SUCCESS
+            DebugLog.i("AndroidTts", if (ready) "engine ready" else "init failed status=$status")
         }
         tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) {}
+            override fun onStart(utteranceId: String?) {
+                DebugLog.d("AndroidTts", "onStart $utteranceId")
+            }
             override fun onDone(utteranceId: String?) {
-                if (utteranceId == currentUtterance) currentUtterance = null
+                DebugLog.d("AndroidTts", "onDone $utteranceId")
+                resumeAndRemove(utteranceId)
             }
 
             @Deprecated("legacy", level = DeprecationLevel.WARNING)
             override fun onError(utteranceId: String?) {
-                if (utteranceId == currentUtterance) currentUtterance = null
+                DebugLog.w("AndroidTts", "onError(legacy) $utteranceId")
+                resumeAndRemove(utteranceId)
             }
 
             override fun onError(utteranceId: String?, errorCode: Int) {
-                if (utteranceId == currentUtterance) currentUtterance = null
+                DebugLog.w("AndroidTts", "onError $utteranceId code=$errorCode")
+                resumeAndRemove(utteranceId)
+            }
+
+            override fun onStop(utteranceId: String?, interrupted: Boolean) {
+                DebugLog.d("AndroidTts", "onStop $utteranceId interrupted=$interrupted")
+                resumeAndRemove(utteranceId)
             }
         })
     }
 
     override suspend fun speak(text: String, languageTag: String, voiceId: String?): Unit =
         suspendCancellableCoroutine { cont ->
-            if (!waitForReady(2000)) {
+            if (!waitForReady(2500)) {
+                DebugLog.w("AndroidTts", "engine not ready — skipping speak")
                 cont.resume(Unit)
                 return@suspendCancellableCoroutine
             }
             try {
                 val locale = Locale.forLanguageTag(languageTag)
-                tts.language = locale
+                val supported = tts.isLanguageAvailable(locale)
+                if (supported < TextToSpeech.LANG_AVAILABLE) {
+                    DebugLog.w("AndroidTts", "lang $languageTag not installed (code=$supported); falling back to system default")
+                } else {
+                    tts.language = locale
+                }
                 if (!voiceId.isNullOrBlank()) {
                     tts.voices?.firstOrNull { it.name == voiceId }?.let { tts.voice = it }
                 }
                 val id = UUID.randomUUID().toString()
-                currentUtterance = id
-                tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, id)
-            } catch (_: Throwable) {
-                // ignore — best-effort speak
+                pending[id] = cont
+                cont.invokeOnCancellation {
+                    try { tts.stop() } catch (_: Throwable) {}
+                    pending.remove(id)
+                }
+                val rc = tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, id)
+                if (rc != TextToSpeech.SUCCESS) {
+                    DebugLog.w("AndroidTts", "speak() returned $rc")
+                    pending.remove(id)
+                    cont.resume(Unit)
+                }
+            } catch (t: Throwable) {
+                DebugLog.e("AndroidTts", "speak failed", t)
+                cont.resume(Unit)
             }
-            cont.resume(Unit)
         }
 
     override fun stop() {
         try { tts.stop() } catch (_: Throwable) {}
-        currentUtterance = null
+        // Resume any pending coroutines so we don't deadlock the pipeline.
+        val keys = pending.keys.toList()
+        keys.forEach { resumeAndRemove(it) }
     }
 
     override fun shutdown() {
         try {
             tts.stop()
             tts.shutdown()
-        } catch (_: Throwable) {
-        }
+        } catch (_: Throwable) {}
+        val keys = pending.keys.toList()
+        keys.forEach { resumeAndRemove(it) }
+    }
+
+    private fun resumeAndRemove(utteranceId: String?) {
+        val cont = pending.remove(utteranceId) ?: return
+        if (!cont.isCompleted) cont.resume(Unit)
     }
 
     private fun waitForReady(timeoutMs: Long): Boolean {

@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
@@ -31,6 +32,7 @@ import com.piash.priya.ui.components.VibeAuroraBackground
 import com.piash.priya.ui.screens.AboutScreen
 import com.piash.priya.ui.screens.ChatScreen
 import com.piash.priya.ui.screens.HomeScreen
+import com.piash.priya.ui.screens.LogsScreen
 import com.piash.priya.ui.screens.SettingsScreen
 import com.piash.priya.ui.theme.VibeCyan
 import com.piash.priya.ui.theme.VibeMuted
@@ -94,6 +96,7 @@ fun PriyaApp() {
                 composable("home") { HomeScreen() }
                 composable("chat") { ChatScreen() }
                 composable("settings") { SettingsScreen() }
+                composable("logs") { LogsScreen() }
                 composable("about") { AboutScreen() }
             }
         }
@@ -106,6 +109,7 @@ private val NavTabs = listOf(
     NavTab("home", "Home", Icons.Filled.Home),
     NavTab("chat", "Chat", Icons.Filled.Chat),
     NavTab("settings", "Settings", Icons.Filled.Settings),
+    NavTab("logs", "Logs", Icons.Filled.BugReport),
     NavTab("about", "About", Icons.Filled.Info),
 )
 

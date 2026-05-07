@@ -1,6 +1,7 @@
 package com.piash.priya.ai
 
 import com.piash.priya.data.SettingsRepository
+import com.piash.priya.util.DebugLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -41,12 +42,15 @@ class ChatEngine(
         onChunk: (String) -> Unit = {},
     ): String = turnLock.withLock {
         _lastError.value = null
+        DebugLog.i("ChatEngine", "send: \"${userText.take(120)}\"")
         val provider = try {
             providers.active()
         } catch (t: Throwable) {
+            DebugLog.e("ChatEngine", "provider missing", t)
             _lastError.value = friendly(t)
             throw t
         }
+        DebugLog.d("ChatEngine", "active provider=${provider.id}")
         val current = _transcript.value + ChatMessage(Role.USER, userText)
         _transcript.value = current
 
@@ -55,14 +59,17 @@ class ChatEngine(
         val payload = listOf(ChatMessage(Role.SYSTEM, systemPrompt)) + window
 
         _streaming.value = true
+        val started = System.currentTimeMillis()
         val reply = try {
             provider.complete(payload, onChunk)
         } catch (t: Throwable) {
+            DebugLog.e("ChatEngine", "provider.complete failed", t)
             _lastError.value = friendly(t)
             throw t
         } finally {
             _streaming.value = false
         }
+        DebugLog.i("ChatEngine", "reply received in ${System.currentTimeMillis() - started}ms (${reply.length} chars)")
         _transcript.value = current + ChatMessage(Role.ASSISTANT, reply)
         reply
     }

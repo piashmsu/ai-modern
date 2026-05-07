@@ -10,6 +10,7 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.piash.priya.util.DebugLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -107,9 +108,19 @@ class SpeechRecognizerWrapper(private val context: Context) {
             recognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
                 setRecognitionListener(listener)
             }
+            // The user's preferred tag is the first hint, but we also pass a
+            // fallback chain via EXTRA_LANGUAGE_PREFERENCE so devices without
+            // bn-BD installed fall back to bn-IN, then en-IN, then en-US
+            // instead of failing silently.
+            val fallbacks = arrayListOf(languageTag).apply {
+                addAll(listOf("bn-BD", "bn-IN", "en-IN", "en-US"))
+            }.distinct().toTypedArray()
+            DebugLog.i(TAG, "STT start lang=$languageTag fallbacks=${fallbacks.joinToString()}")
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE, languageTag)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, languageTag)
+                putExtra("android.speech.extra.EXTRA_LANGUAGE_PREFERENCE", fallbacks)
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                 putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
                 putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false)
@@ -118,6 +129,7 @@ class SpeechRecognizerWrapper(private val context: Context) {
             recognizer?.startListening(intent)
         } catch (t: Throwable) {
             Log.e(TAG, "start failed", t)
+            DebugLog.e(TAG, "STT start failed", t)
             active.set(false)
             scope.launch { _events.emit(Event.Error(-2, t.message ?: "start failed")) }
         }

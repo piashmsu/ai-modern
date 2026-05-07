@@ -50,8 +50,10 @@ class GeminiProvider(
                 }
             })
             if (systemText.isNotBlank()) {
+                // Gemini's systemInstruction must NOT carry a role field —
+                // adding "role": "system" causes HTTP 400 because the only
+                // valid roles for content blocks are "user" and "model".
                 put("systemInstruction", buildJsonObject {
-                    put("role", "system")
                     put("parts", buildJsonArray {
                         add(buildJsonObject { put("text", systemText) })
                     })
@@ -60,6 +62,7 @@ class GeminiProvider(
             put("generationConfig", buildJsonObject {
                 put("temperature", 0.85)
                 put("topP", 0.95)
+                put("maxOutputTokens", 1024)
             })
         }
 

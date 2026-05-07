@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import com.piash.priya.PriyaApplication
 import com.piash.priya.ai.ChatMessage
 import com.piash.priya.ai.Role
+import com.piash.priya.automation.AccessibilityEnabler
 import com.piash.priya.data.ProviderId
 import com.piash.priya.data.SettingsRepository
 import com.piash.priya.data.SttBackend
@@ -29,6 +30,7 @@ import com.piash.priya.data.TtsBackend
 import com.piash.priya.ui.theme.VibeMuted
 import com.piash.priya.ui.theme.VibePink
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -146,6 +148,8 @@ fun SettingsScreen() {
             modifier = Modifier.fillMaxWidth()
         ) { Text("Open Accessibility settings — enable Priya") }
 
+        RootEnableAccessibilityButton()
+
         OutlinedButton(
             onClick = {
                 context.startActivity(
@@ -212,6 +216,38 @@ private sealed interface TestStatus {
     data object Running : TestStatus
     data class Ok(val reply: String) : TestStatus
     data class Fail(val message: String) : TestStatus
+}
+
+@Composable
+private fun RootEnableAccessibilityButton() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var status by remember { mutableStateOf<String?>(null) }
+    var ok by remember { mutableStateOf(false) }
+    Column {
+        Button(
+            onClick = {
+                status = "চলছে…"
+                scope.launch {
+                    val outcome = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        AccessibilityEnabler.enableViaRoot(context)
+                    }
+                    ok = outcome.success
+                    status = outcome.message
+                }
+            },
+            colors = ButtonDefaults.buttonColors(containerColor = VibePink, contentColor = Color.White),
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("Enable accessibility automatically (root)") }
+        if (status != null) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                status!!,
+                color = if (ok) Color(0xFF7CFFB2) else Color(0xFFFFB347),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
 }
 
 @Composable
